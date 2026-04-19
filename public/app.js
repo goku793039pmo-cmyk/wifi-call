@@ -31,6 +31,7 @@ const remoteAudio = document.getElementById("remoteAudio");
 const diagServerEl = document.getElementById("diagServer");
 const diagRoomEl = document.getElementById("diagRoom");
 const diagMicEl = document.getElementById("diagMic");
+const diagCallEl = document.getElementById("diagCall");
 
 state.hasMicAccess = false;
 
@@ -66,6 +67,10 @@ function updateButtons() {
   micBtn.disabled = state.hasMicAccess;
   sendChatBtn.disabled = !joined;
   muteBtn.textContent = state.isMuted ? "Unmute" : "Mute";
+}
+
+function setCallDiagnostic(text) {
+  setDiagnostic(diagCallEl, text);
 }
 
 async function checkServerHealth() {
@@ -215,14 +220,32 @@ function createPeerConnection() {
 
   connection.ontrack = (event) => {
     remoteAudio.srcObject = event.streams[0];
+    remoteAudio.volume = 1;
+    remoteAudio
+      .play()
+      .then(() => {
+        setCallDiagnostic("Audio playing");
+      })
+      .catch(() => {
+        setCallDiagnostic("Playback blocked");
+        setStatus("Call connected, but browser playback is blocked. Press play on the audio control.");
+      });
     setStatus("Call connected.");
     setBanner("live", "Call is live", "You should hear the other side now.");
   };
 
   connection.onconnectionstatechange = () => {
+    setCallDiagnostic(connection.connectionState || "Connecting");
     if (connection.connectionState === "failed" || connection.connectionState === "disconnected") {
       setStatus(`Call ${connection.connectionState}. Hang up and try again.`);
       setBanner("ready", "Peer is still here", "Try starting the call again.");
+    }
+  };
+
+  connection.oniceconnectionstatechange = () => {
+    if (connection.iceConnectionState === "failed") {
+      setCallDiagnostic("ICE failed");
+      setStatus("Network path failed. This often means these two devices need a TURN relay.");
     }
   };
 
@@ -273,6 +296,7 @@ async function joinRoom() {
   setStatus(`Joined room "${room}". Waiting for another person.`);
   setBanner("waiting", "Joined room", "Now open the same room somewhere else.");
   setDiagnostic(diagRoomEl, `Joined ${room}`);
+  setCallDiagnostic("Idle");
   await loadHistory();
   updateButtons();
 }
@@ -312,6 +336,7 @@ async function handleSignal(message) {
     if (!state.hasMicAccess) {
       setStatus(`Incoming call from ${message.from}. Press Enable Mic, then ask them to call again.`);
       setBanner("calling", "Incoming call waiting", "Enable your mic first. The browser will ask for permission.");
+      setCallDiagnostic("Waiting for mic");
       return;
     }
     const connection = await startPeerConnection();
@@ -325,6 +350,7 @@ async function handleSignal(message) {
     });
     setStatus(`Incoming call answered from ${message.from}.`);
     setBanner("calling", "Connecting call", `Answering ${message.from} now.`);
+    setCallDiagnostic("Answering");
     return;
   }
 
@@ -332,6 +358,7 @@ async function handleSignal(message) {
     await state.peerConnection.setRemoteDescription(message.answer);
     setStatus("Call answered.");
     setBanner("calling", "Call answered", "Finishing connection now.");
+    setCallDiagnostic("Negotiated");
     return;
   }
 
@@ -349,6 +376,7 @@ async function handleSignal(message) {
     await loadHistory();
     setBanner("calling", "Incoming call", `${message.from} is calling you now.`);
     setStatus(`Incoming call from ${message.from}.`);
+    setCallDiagnostic("Incoming");
     return;
   }
 
@@ -356,6 +384,7 @@ async function handleSignal(message) {
     closeCall(false);
     setStatus("The other person hung up.");
     setBanner("ready", "Call ended", "The other person is still in the room.");
+    setCallDiagnostic("Ended");
     await loadHistory();
   }
 }
@@ -369,6 +398,7 @@ async function startCall() {
   if (!state.hasMicAccess) {
     setStatus("Press Enable Mic first.");
     setBanner("calling", "Mic needed first", "Use Enable Mic, allow permission, then start the call.");
+    setCallDiagnostic("Mic needed");
     return;
   }
 
@@ -386,6 +416,7 @@ async function startCall() {
   });
   setStatus(`Calling ${state.remotePeerId}...`);
   setBanner("calling", "Calling now", `Trying to connect to ${state.remotePeerId}.`);
+  setCallDiagnostic("Calling");
   await loadHistory();
 }
 
@@ -396,6 +427,7 @@ function closeCall(notify = true) {
   }
 
   remoteAudio.srcObject = null;
+  remoteAudio.pause();
   updateButtons();
 
   if (notify && state.remotePeerId) {
@@ -410,6 +442,8 @@ function closeCall(notify = true) {
   } else {
     setBanner("waiting", "Waiting for someone else to join", "Open the same room in another tab or device.");
   }
+
+  setCallDiagnostic("Idle");
 
   loadHistory();
 }
@@ -453,6 +487,7 @@ async function enableMic() {
   try {
     await ensureLocalAudio();
     setStatus("Microphone is ready.");
+    setCallDiagnostic("Ready");
     if (state.remotePeerId) {
       setBanner("ready", "Mic ready", "The other person is here. Press Start Call.");
     } else {
@@ -492,4 +527,5 @@ renderEmptyChat();
 renderCallLog();
 setBanner("waiting", "Waiting for someone else to join", "Open the same room in another tab or device.");
 checkServerHealth();
+setCallDiagnostic("Idle");
 updateButtons();

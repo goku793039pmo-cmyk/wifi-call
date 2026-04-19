@@ -56,7 +56,7 @@
           <p id="peers" class="peers">No one else is here yet.</p>
         </div>
 
-        <audio id="remoteAudio" autoplay></audio>
+        <audio id="remoteAudio" autoplay playsinline controls></audio>
       </section>
 
       <section class="notes diagnostics">
@@ -78,6 +78,10 @@
             <strong>Mic</strong>
             <span id="diagMic">Not enabled</span>
           </div>
+          <div class="diag-card">
+            <strong>Call</strong>
+            <span id="diagCall">Idle</span>
+          </div>
         </div>
       </section>
 
@@ -92,6 +96,9 @@
           </ol>
           <p class="small-print">
             For LAN testing with microphone access on another device, add local cert files and use HTTPS on port 3443.
+          </p>
+          <p class="small-print">
+            Hosted version note: signaling is hosted, but audio is still peer-to-peer WebRTC. Some networks need a TURN relay or the call may connect with no audio.
           </p>
         </section>
 
