@@ -31,6 +31,8 @@ const state = {
   localAnalyser: null,
   localAudioContext: null,
   currentStatus: "offline",
+  notifyPermission: typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  accountMode: "local",
 };
 
 const els = {
@@ -366,6 +368,19 @@ function updateButtons() {
   updateShareLink();
 }
 
+function maybeNotify(title, body) {
+  if (typeof Notification === "undefined") {
+    return;
+  }
+  if (state.notifyPermission !== "granted") {
+    return;
+  }
+  if (document.visibilityState === "visible") {
+    return;
+  }
+  new Notification(title, { body });
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -386,10 +401,14 @@ async function checkHealth() {
 async function loadConfig() {
   try {
     state.config = await fetchJson("/config");
+    state.accountMode = state.config.features?.authMode || "local";
     if (state.config.turn?.urls?.length) {
       setDiag("diagTurn", "Configured");
     } else {
       setDiag("diagTurn", "STUN only");
+    }
+    if (state.accountMode !== "local") {
+      setStatus(`Joined in ${state.accountMode} mode when you connect provider keys.`);
     }
   } catch {
     setDiag("diagTurn", "Unavailable");
@@ -691,6 +710,15 @@ async function startCall() {
   const peer = state.peers.find((item) => item.name === targetName && item.online);
   if (!peer) {
     setStatus("That username is not online in this room key.");
+    setBanner("ready", "Unavailable", "That person is offline or not in this room.");
+    setDiag("diagCall", "Unavailable");
+    return;
+  }
+
+  if (peer.status === "in-call") {
+    setStatus(`${peer.name} is already in a call.`);
+    setBanner("ready", "Busy", "Try again when they are available.");
+    setDiag("diagCall", "Busy");
     return;
   }
 
@@ -793,6 +821,14 @@ async function handleSignal(message) {
   }
 
   if (message.type === "offer") {
+    if (state.pendingOffer || isInCall()) {
+      await sendSignal({
+        type: "call-busy",
+        to: message.from,
+        toName: message.fromName,
+      });
+      return;
+    }
     state.selectedPeerId = message.from;
     state.selectedPeerName = message.fromName;
     els.targetName.value = message.fromName;
@@ -802,6 +838,7 @@ async function handleSignal(message) {
       els.incomingDialog.showModal();
     }
     playRingtone();
+    maybeNotify("Incoming Wi-Fi Call", `${message.fromName} is calling you.`);
     setBanner("calling", "Incoming call", `Answer or decline ${message.fromName}.`);
     setStatus(`Incoming call from ${message.fromName}.`);
     setDiag("diagCall", "Incoming");
@@ -829,6 +866,14 @@ async function handleSignal(message) {
     return;
   }
 
+  if (message.type === "call-busy") {
+    setStatus(`${message.fromName} is busy.`);
+    setBanner("ready", "Busy", "The other person is already on a call.");
+    setDiag("diagCall", "Busy");
+    closeCall(false);
+    return;
+  }
+
   if (message.type === "hangup") {
     setStatus(`${message.fromName} hung up.`);
     closeCall(false);
@@ -845,6 +890,7 @@ async function handleSignal(message) {
   if (message.type === "chat-message") {
     state.messages.push({ ...message, readAt: null });
     renderChat();
+    maybeNotify(`Message from ${message.fromName}`, message.text);
     await sendSignal({
       type: "chat-read",
       to: message.from,
@@ -897,6 +943,7 @@ async function joinRoom() {
 
   connectEventStream();
   upsertContact(selfName);
+  localStorage.setItem("wifi-call-last-user", selfName);
 }
 
 function connectEventStream() {
@@ -930,7 +977,13 @@ function connectEventStream() {
   };
 
   setStatus(`Joined as ${state.selfName}.`);
-  setBanner("waiting", "Joined", "Select a username from the people list or use a call link.");
+  setBanner(
+    "waiting",
+    "Joined",
+    state.accountMode === "local"
+      ? "Local account mode. Select a username from the people list or use a call link."
+      : `Connected in ${state.accountMode}. Select a username from the people list or use a call link.`
+  );
   setDiag("diagRoom", "Joined");
   loadHistory().catch(() => {});
   sendPresenceStatus("online").catch(() => {});
@@ -1145,11 +1198,12 @@ function saveContactFromInput() {
 
 function hydrateFromUrl() {
   const params = new URLSearchParams(window.location.search);
+  const savedUser = normalizeName(localStorage.getItem("wifi-call-last-user"));
   const user = normalizeName(params.get("user"));
   const target = normalizeName(params.get("target"));
   const key = params.get("key") || "";
-  if (user) {
-    els.name.value = user;
+  if (user || savedUser) {
+    els.name.value = user || savedUser;
   }
   if (target) {
     els.targetName.value = target;
@@ -1163,6 +1217,18 @@ function hydrateFromUrl() {
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+  }
+}
+
+async function requestNotificationPermission() {
+  if (typeof Notification === "undefined" || Notification.permission !== "default") {
+    state.notifyPermission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+    return;
+  }
+  try {
+    state.notifyPermission = await Notification.requestPermission();
+  } catch {
+    state.notifyPermission = "denied";
   }
 }
 
@@ -1209,6 +1275,7 @@ renderHistory();
 renderChat();
 checkHealth().catch(() => {});
 loadConfig().catch(() => {});
+requestNotificationPermission().catch(() => {});
 registerServiceWorker();
 setBanner("waiting", "Pick your username and join", "Presence, calls, and chat stay inside the same key space.");
 setTypingStatus("No one is typing.");
@@ -1218,3 +1285,8 @@ setDiag("diagIce", "Idle");
 setDiag("diagStats", "No active call");
 setDiag("diagVoice", "Silent");
 updateButtons();
+
+window.addEventListener("beforeunload", () => {
+  state.reconnectAllowed = false;
+  state.eventSource?.close();
+});

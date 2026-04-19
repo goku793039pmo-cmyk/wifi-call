@@ -294,15 +294,23 @@ function handleConfig(res) {
   const turnUrls = process.env.TURN_URLS ? process.env.TURN_URLS.split(",").map((item) => item.trim()) : [];
   sendJson(res, 200, {
     turn: {
+      enabled: turnUrls.length > 0,
       urls: turnUrls,
       username: process.env.TURN_USERNAME || "",
       credential: process.env.TURN_CREDENTIAL || "",
     },
     hooks: {
       supabaseUrl: process.env.SUPABASE_URL || "",
+      supabaseAnonKey: process.env.SUPABASE_ANON_KEY ? "configured" : "",
       firebaseProjectId: process.env.FIREBASE_PROJECT_ID || "",
+      firebaseApiKey: process.env.FIREBASE_API_KEY ? "configured" : "",
       onesignalAppId: process.env.ONESIGNAL_APP_ID || "",
       cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
+    },
+    features: {
+      authMode: process.env.SUPABASE_URL ? "supabase-ready" : process.env.FIREBASE_PROJECT_ID ? "firebase-ready" : "local",
+      pushMode: process.env.ONESIGNAL_APP_ID ? "onesignal-ready" : "browser-only",
+      storageMode: process.env.CLOUDINARY_CLOUD_NAME ? "cloudinary-ready" : "p2p-only",
     },
   });
 }

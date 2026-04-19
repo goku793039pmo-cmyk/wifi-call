@@ -26,6 +26,29 @@ Notes:
 - Render already gives you HTTPS, so the local `certs/` files are not needed there.
 - Room state, chat, and call history are in memory only, so they reset if the service restarts.
 
+### Optional Render Environment Variables
+
+For TURN relay support:
+
+```text
+TURN_URLS=turn:your-turn-host:3478?transport=udp,turn:your-turn-host:3478?transport=tcp
+TURN_USERNAME=your-turn-username
+TURN_CREDENTIAL=your-turn-password
+```
+
+For external service hooks:
+
+```text
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+FIREBASE_PROJECT_ID=...
+FIREBASE_API_KEY=...
+ONESIGNAL_APP_ID=...
+CLOUDINARY_CLOUD_NAME=...
+```
+
+The app works without these, but with them it can move from local-only mode to provider-backed auth/push/media workflows.
+
 ## Push To GitHub
 
 The repo is already initialized locally.
