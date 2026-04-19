@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wi-Fi Call</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Free App-to-App Calling</p>
+        <h1>Use the same room on two Chromebooks or phones and talk over Wi-Fi.</h1>
+        <p class="lede">
+          This works only between browsers using this app. It does not call normal phone numbers.
+        </p>
+        <div class="hero-meta">
+          <span class="pill">Ready for Render</span>
+          <span class="pill">Browser-to-browser audio</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div id="presenceBanner" class="presence-banner waiting">
+          <strong id="bannerTitle">Waiting for someone else to join</strong>
+          <span id="bannerDetail">Open the same room in another tab or device.</span>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Your name</span>
+            <input id="name" maxlength="24" placeholder="alex" />
+          </label>
+          <label class="field">
+            <span>Room code</span>
+            <input id="room" maxlength="24" placeholder="family-call" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="joinBtn" class="primary">Join Room</button>
+          <button id="micBtn">Enable Mic</button>
+          <button id="callBtn" disabled>Start Call</button>
+          <button id="hangupBtn" disabled>Hang Up</button>
+          <button id="muteBtn" disabled>Mute</button>
+        </div>
+
+        <div class="share-row">
+          <input id="shareLink" readonly placeholder="Room link will appear here" />
+          <button id="copyLinkBtn">Copy Link</button>
+        </div>
+
+        <div class="status-wrap">
+          <p id="status" class="status">Pick a name and room, then join.</p>
+          <p id="micStatus" class="mic-status">Mic not enabled yet.</p>
+          <p id="peers" class="peers">No one else is here yet.</p>
+        </div>
+
+        <audio id="remoteAudio" autoplay></audio>
+      </section>
+
+      <section class="notes diagnostics">
+        <h2>Diagnostics</h2>
+        <div class="diag-grid">
+          <div class="diag-card">
+            <strong>Page</strong>
+            <span id="diagPage">Loaded</span>
+          </div>
+          <div class="diag-card">
+            <strong>Server</strong>
+            <span id="diagServer">Checking...</span>
+          </div>
+          <div class="diag-card">
+            <strong>Room</strong>
+            <span id="diagRoom">Not joined</span>
+          </div>
+          <div class="diag-card">
+            <strong>Mic</strong>
+            <span id="diagMic">Not enabled</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <section class="notes">
+          <h2>How to use it</h2>
+          <ol>
+            <li>Open this page on two devices.</li>
+            <li>Use the same room code on both devices, or send the room link.</li>
+            <li>Allow microphone access.</li>
+            <li>Press Start Call on one side.</li>
+          </ol>
+          <p class="small-print">
+            For LAN testing with microphone access on another device, add local cert files and use HTTPS on port 3443.
+          </p>
+        </section>
+
+        <section class="notes">
+          <h2>Chat</h2>
+          <div id="chatLog" class="chat-log"></div>
+          <div class="chat-row">
+            <input id="chatInput" maxlength="400" placeholder="Type a message" />
+            <button id="sendChatBtn" disabled>Send</button>
+          </div>
+        </section>
+
+        <section class="notes">
+          <h2>Call History</h2>
+          <div id="historyLog" class="history-log"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

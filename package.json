@@ -1,0 +1,9 @@
+{
+  "name": "wifi-call",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Free Chromebook-friendly app-to-app voice calling over Wi-Fi",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
