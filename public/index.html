@@ -3,111 +3,138 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#113d33" />
     <title>Wi-Fi Call</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="shell">
       <section class="hero">
-        <p class="eyebrow">Free App-to-App Calling</p>
-        <h1>Use the same room on two Chromebooks or phones and talk over Wi-Fi.</h1>
+        <p class="eyebrow">Wi-Fi Call</p>
+        <h1>Username calling, live presence, media controls, and browser-to-browser files.</h1>
         <p class="lede">
-          This works only between browsers using this app. It does not call normal phone numbers.
+          This is still app-to-app over WebRTC, but it now behaves more like a real calling client.
         </p>
         <div class="hero-meta">
-          <span class="pill">Ready for Render</span>
-          <span class="pill">Browser-to-browser audio</span>
+          <span class="pill">Hosted on Render</span>
+          <span class="pill">TURN-ready</span>
+          <span class="pill">PWA-ready</span>
         </div>
       </section>
 
       <section class="panel">
         <div id="presenceBanner" class="presence-banner waiting">
-          <strong id="bannerTitle">Waiting for someone else to join</strong>
-          <span id="bannerDetail">Open the same room in another tab or device.</span>
+          <strong id="bannerTitle">Pick your username and join</strong>
+          <span id="bannerDetail">Presence, calls, and chat stay inside the same key space.</span>
         </div>
 
         <div class="field-grid">
           <label class="field">
-            <span>Your name</span>
-            <input id="name" maxlength="24" placeholder="alex" />
+            <span>Your username</span>
+            <input id="name" maxlength="24" placeholder="goku" />
           </label>
           <label class="field">
-            <span>Room code</span>
-            <input id="room" maxlength="24" placeholder="family-call" />
+            <span>Room key / passcode</span>
+            <input id="passcode" maxlength="32" placeholder="shared-secret" />
+          </label>
+          <label class="field">
+            <span>Call username</span>
+            <input id="targetName" maxlength="24" placeholder="alex" />
+          </label>
+          <label class="field">
+            <span>Call link</span>
+            <input id="shareLink" readonly placeholder="Join and pick a contact first" />
           </label>
         </div>
 
         <div class="actions">
-          <button id="joinBtn" class="primary">Join Room</button>
+          <button id="joinBtn" class="primary">Join</button>
           <button id="micBtn">Enable Mic</button>
-          <button id="callBtn" disabled>Start Call</button>
+          <button id="cameraBtn">Camera</button>
+          <button id="screenBtn">Share Screen</button>
+          <button id="callBtn" disabled>Call</button>
+          <button id="answerBtn" disabled>Answer</button>
+          <button id="declineBtn" disabled>Decline</button>
           <button id="hangupBtn" disabled>Hang Up</button>
           <button id="muteBtn" disabled>Mute</button>
-        </div>
-
-        <div class="share-row">
-          <input id="shareLink" readonly placeholder="Room link will appear here" />
+          <button id="pttBtn" disabled>Push To Talk Off</button>
+          <button id="recordBtn" disabled>Record</button>
           <button id="copyLinkBtn">Copy Link</button>
         </div>
 
-        <div class="status-wrap">
-          <p id="status" class="status">Pick a name and room, then join.</p>
-          <p id="micStatus" class="mic-status">Mic not enabled yet.</p>
-          <p id="peers" class="peers">No one else is here yet.</p>
+        <div class="toggle-row">
+          <label><input id="echoToggle" type="checkbox" checked /> Echo cancellation</label>
+          <label><input id="noiseToggle" type="checkbox" checked /> Noise suppression</label>
+          <label><input id="videoToggle" type="checkbox" /> Start with camera</label>
         </div>
 
-        <audio id="remoteAudio" autoplay playsinline controls></audio>
+        <div class="status-wrap">
+          <p id="status" class="status">Not joined yet.</p>
+          <p id="micStatus" class="mic-status">Mic not enabled.</p>
+          <p id="peers" class="peers">No peer selected.</p>
+          <p id="typingStatus" class="typing-status">No one is typing.</p>
+        </div>
+
+        <div class="media-grid">
+          <div class="media-card">
+            <strong>Local</strong>
+            <video id="localVideo" autoplay muted playsinline></video>
+          </div>
+          <div class="media-card">
+            <strong>Remote</strong>
+            <video id="remoteVideo" autoplay playsinline></video>
+            <audio id="remoteAudio" autoplay playsinline controls></audio>
+          </div>
+        </div>
       </section>
 
       <section class="notes diagnostics">
         <h2>Diagnostics</h2>
         <div class="diag-grid">
-          <div class="diag-card">
-            <strong>Page</strong>
-            <span id="diagPage">Loaded</span>
-          </div>
-          <div class="diag-card">
-            <strong>Server</strong>
-            <span id="diagServer">Checking...</span>
-          </div>
-          <div class="diag-card">
-            <strong>Room</strong>
-            <span id="diagRoom">Not joined</span>
-          </div>
-          <div class="diag-card">
-            <strong>Mic</strong>
-            <span id="diagMic">Not enabled</span>
-          </div>
-          <div class="diag-card">
-            <strong>Call</strong>
-            <span id="diagCall">Idle</span>
-          </div>
+          <div class="diag-card"><strong>Page</strong><span id="diagPage">Loaded</span></div>
+          <div class="diag-card"><strong>Server</strong><span id="diagServer">Checking...</span></div>
+          <div class="diag-card"><strong>Room</strong><span id="diagRoom">Not joined</span></div>
+          <div class="diag-card"><strong>Mic</strong><span id="diagMic">Not enabled</span></div>
+          <div class="diag-card"><strong>Call</strong><span id="diagCall">Idle</span></div>
+          <div class="diag-card"><strong>ICE</strong><span id="diagIce">Idle</span></div>
+          <div class="diag-card"><strong>Media</strong><span id="diagMedia">Audio only</span></div>
+          <div class="diag-card"><strong>Stats</strong><span id="diagStats">No active call</span></div>
+          <div class="diag-card"><strong>TURN</strong><span id="diagTurn">Checking...</span></div>
+          <div class="diag-card"><strong>Voice</strong><span id="diagVoice">Silent</span></div>
         </div>
       </section>
 
       <section class="grid">
         <section class="notes">
-          <h2>How to use it</h2>
-          <ol>
-            <li>Open this page on two devices.</li>
-            <li>Use the same room code on both devices, or send the room link.</li>
-            <li>Allow microphone access.</li>
-            <li>Press Start Call on one side.</li>
-          </ol>
-          <p class="small-print">
-            For LAN testing with microphone access on another device, add local cert files and use HTTPS on port 3443.
-          </p>
-          <p class="small-print">
-            Hosted version note: signaling is hosted, but audio is still peer-to-peer WebRTC. Some networks need a TURN relay or the call may connect with no audio.
-          </p>
+          <h2>People</h2>
+          <div id="presenceList" class="list-pane"></div>
+        </section>
+
+        <section class="notes">
+          <h2>Contacts</h2>
+          <div id="contactsList" class="list-pane"></div>
+          <div class="chat-row">
+            <input id="contactNameInput" maxlength="24" placeholder="favorite username" />
+            <button id="saveContactBtn">Save</button>
+          </div>
         </section>
 
         <section class="notes">
           <h2>Chat</h2>
           <div id="chatLog" class="chat-log"></div>
           <div class="chat-row">
-            <input id="chatInput" maxlength="400" placeholder="Type a message" />
+            <input id="chatInput" maxlength="400" placeholder="Message your selected contact" />
             <button id="sendChatBtn" disabled>Send</button>
+          </div>
+        </section>
+
+        <section class="notes">
+          <h2>Files</h2>
+          <div id="filesLog" class="list-pane"></div>
+          <div class="chat-row">
+            <input id="fileInput" type="file" />
+            <button id="sendFileBtn" disabled>Send File</button>
           </div>
         </section>
 
@@ -117,6 +144,15 @@
         </section>
       </section>
     </main>
+
+    <dialog id="incomingDialog" class="incoming-dialog">
+      <h2>Incoming Call</h2>
+      <p id="incomingText">Someone is calling you.</p>
+      <div class="actions">
+        <button id="dialogAnswerBtn" class="primary">Answer</button>
+        <button id="dialogDeclineBtn">Decline</button>
+      </div>
+    </dialog>
 
     <script src="/app.js" type="module"></script>
   </body>

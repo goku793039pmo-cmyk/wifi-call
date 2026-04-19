@@ -1,0 +1,9 @@
+{
+  "name": "Wi-Fi Call",
+  "short_name": "WiFi Call",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f2ede2",
+  "theme_color": "#113d33",
+  "description": "Browser-to-browser calling, video, chat, files, and presence."
+}

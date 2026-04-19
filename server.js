@@ -2,6 +2,7 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { URL } = require("url");
 
 const PORT = process.env.PORT || 3001;
@@ -17,12 +18,14 @@ const mimeTypes = {
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
 };
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       clients: new Map(),
+      directory: new Map(),
       messages: [],
       callLog: [],
       nextMessageId: 1,
@@ -30,6 +33,10 @@ function getRoom(roomId) {
   }
 
   return rooms.get(roomId);
+}
+
+function now() {
+  return Date.now();
 }
 
 function sendJson(res, statusCode, payload) {
@@ -46,7 +53,7 @@ function collectBody(req) {
 
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (body.length > 2_000_000) {
         reject(new Error("Request too large"));
         req.destroy();
       }
@@ -81,53 +88,92 @@ function serveFile(reqPath, res) {
   });
 }
 
-function handleEvents(req, res, url) {
-  const roomId = url.searchParams.get("room");
-  const clientId = url.searchParams.get("client");
+function normalizeName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 24);
+}
 
-  if (!roomId || !clientId) {
-    sendJson(res, 400, { error: "room and client are required" });
-    return;
-  }
+function rosterSnapshot(room) {
+  return Array.from(room.directory.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
 
-  const room = getRoom(roomId);
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-  });
-  res.write("\n");
-
-  room.clients.set(clientId, res);
+function writePresence(res, room) {
   res.write(
     `data: ${JSON.stringify({
       type: "presence",
-      peers: Array.from(room.clients.keys()),
+      peers: rosterSnapshot(room),
       callLog: room.callLog,
     })}\n\n`
   );
+}
 
-  req.on("close", () => {
-    room.clients.delete(clientId);
-    broadcast(roomId, {
-      type: "presence",
-      peers: Array.from(room.clients.keys()),
-    });
+function broadcastPresence(roomId) {
+  const room = getRoom(roomId);
+  const payload = {
+    type: "presence",
+    peers: rosterSnapshot(room),
+    callLog: room.callLog,
+  };
+  broadcast(roomId, payload, { includeSender: true, persist: false });
+}
+
+function registerClient(roomId, clientId, name, status, res) {
+  const room = getRoom(roomId);
+  room.clients.set(clientId, { res, clientId, name, status, joinedAt: now() });
+  room.directory.set(name, {
+    clientId,
+    name,
+    status,
+    online: true,
+    lastSeen: now(),
   });
 }
 
-function broadcast(roomId, message) {
+function markOffline(roomId, clientId) {
+  const room = getRoom(roomId);
+  const current = room.clients.get(clientId);
+  if (current) {
+    room.clients.delete(clientId);
+    const entry = room.directory.get(current.name);
+    if (entry) {
+      room.directory.set(current.name, {
+        ...entry,
+        online: false,
+        status: "offline",
+        lastSeen: now(),
+      });
+    }
+  }
+}
+
+function addCallLog(roomId, entry) {
+  const room = getRoom(roomId);
+  room.callLog.push({
+    id: `${Date.now()}-${crypto.randomBytes(3).toString("hex")}`,
+    createdAt: now(),
+    ...entry,
+  });
+  if (room.callLog.length > 100) {
+    room.callLog.shift();
+  }
+}
+
+function broadcast(roomId, message, options = {}) {
   const room = getRoom(roomId);
   const event = {
     id: room.nextMessageId++,
+    createdAt: now(),
     ...message,
-    createdAt: Date.now(),
   };
 
-  room.messages.push(event);
-  if (room.messages.length > 200) {
-    room.messages.shift();
+  if (options.persist !== false) {
+    room.messages.push(event);
+    if (room.messages.length > 500) {
+      room.messages.shift();
+    }
   }
 
   const payload = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -136,24 +182,39 @@ function broadcast(roomId, message) {
     if (event.to && event.to !== clientId) {
       continue;
     }
-    if (event.from && event.from === clientId && event.type !== "presence") {
+    if (!options.includeSender && event.from && event.from === clientId) {
       continue;
     }
-    client.write(payload);
+    client.res.write(payload);
   }
 }
 
-function addCallLog(roomId, entry) {
-  const room = getRoom(roomId);
-  room.callLog.push({
-    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-    createdAt: Date.now(),
-    ...entry,
-  });
+function handleEvents(req, res, url) {
+  const roomId = url.searchParams.get("room");
+  const clientId = url.searchParams.get("client");
+  const name = normalizeName(url.searchParams.get("name"));
+  const status = url.searchParams.get("status") || "online";
 
-  if (room.callLog.length > 50) {
-    room.callLog.shift();
+  if (!roomId || !clientId || !name) {
+    sendJson(res, 400, { error: "room, client, and name are required" });
+    return;
   }
+
+  registerClient(roomId, clientId, name, status, res);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  res.write("\n");
+  writePresence(res, getRoom(roomId));
+  broadcastPresence(roomId);
+
+  req.on("close", () => {
+    markOffline(roomId, clientId);
+    broadcastPresence(roomId);
+  });
 }
 
 async function handleSignal(req, res, url) {
@@ -169,25 +230,41 @@ async function handleSignal(req, res, url) {
 
   const roomId = body.room || url.searchParams.get("room");
   const from = body.from;
+  const fromName = normalizeName(body.fromName);
 
   if (!roomId || !from || !body.type) {
     sendJson(res, 400, { error: "room, from, and type are required" });
     return;
   }
 
+  if (body.type === "presence-update" && fromName) {
+    const room = getRoom(roomId);
+    const existing = room.directory.get(fromName);
+    room.directory.set(fromName, {
+      clientId: from,
+      name: fromName,
+      status: body.status || existing?.status || "online",
+      online: true,
+      lastSeen: now(),
+    });
+    broadcastPresence(roomId);
+    sendJson(res, 202, { ok: true });
+    return;
+  }
+
   if (body.type === "call-started") {
     addCallLog(roomId, {
       kind: "started",
-      from: body.from,
-      to: body.to || null,
+      fromName: fromName || body.fromName || from,
+      toName: body.toName || null,
     });
   }
 
   if (body.type === "hangup") {
     addCallLog(roomId, {
       kind: "ended",
-      from: body.from,
-      to: body.to || null,
+      fromName: fromName || body.fromName || from,
+      toName: body.toName || null,
     });
   }
 
@@ -197,7 +274,6 @@ async function handleSignal(req, res, url) {
 
 function handleHistory(res, url) {
   const roomId = url.searchParams.get("room");
-
   if (!roomId) {
     sendJson(res, 400, { error: "room is required" });
     return;
@@ -207,7 +283,27 @@ function handleHistory(res, url) {
   sendJson(res, 200, {
     room: roomId,
     callLog: room.callLog,
-    messages: room.messages.filter((message) => message.type === "chat-message"),
+    peers: rosterSnapshot(room),
+    messages: room.messages.filter((message) =>
+      ["chat-message", "file-meta", "chat-read"].includes(message.type)
+    ),
+  });
+}
+
+function handleConfig(res) {
+  const turnUrls = process.env.TURN_URLS ? process.env.TURN_URLS.split(",").map((item) => item.trim()) : [];
+  sendJson(res, 200, {
+    turn: {
+      urls: turnUrls,
+      username: process.env.TURN_USERNAME || "",
+      credential: process.env.TURN_CREDENTIAL || "",
+    },
+    hooks: {
+      supabaseUrl: process.env.SUPABASE_URL || "",
+      firebaseProjectId: process.env.FIREBASE_PROJECT_ID || "",
+      onesignalAppId: process.env.ONESIGNAL_APP_ID || "",
+      cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
+    },
   });
 }
 
@@ -223,6 +319,11 @@ async function requestHandler(req, res) {
 
   if (req.method === "GET" && url.pathname === "/health") {
     sendJson(res, 200, { ok: true, https: hasTlsMaterial() });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/config") {
+    handleConfig(res);
     return;
   }
 
@@ -259,7 +360,6 @@ server.listen(PORT, HOST, () => {
   console.log(`wifi-call listening on http://${HOST}:${PORT}`);
 });
 
-// Hosted platforms like Render already terminate TLS at the edge.
 if (!process.env.RENDER && hasTlsMaterial()) {
   const tlsServer = https.createServer(
     {
@@ -272,6 +372,4 @@ if (!process.env.RENDER && hasTlsMaterial()) {
   tlsServer.listen(HTTPS_PORT, HOST, () => {
     console.log(`wifi-call listening on https://${HOST}:${HTTPS_PORT}`);
   });
-} else if (!process.env.RENDER) {
-  console.log("https disabled: add certs/localhost-key.pem and certs/localhost-cert.pem to enable it");
 }

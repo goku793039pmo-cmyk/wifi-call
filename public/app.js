@@ -1,92 +1,438 @@
 const state = {
-  room: "",
+  roomId: "",
+  roomKey: "",
+  selfName: "",
   clientId: "",
-  stream: null,
-  peerConnection: null,
+  peers: [],
+  selectedPeerId: "",
+  selectedPeerName: "",
   eventSource: null,
-  remotePeerId: "",
+  reconnectTimer: null,
+  reconnectAllowed: false,
+  config: null,
+  localStream: null,
+  remoteStream: new MediaStream(),
+  peerConnection: null,
+  dataChannel: null,
+  pendingOffer: null,
+  hasMicAccess: false,
   isMuted: false,
+  isCameraOn: false,
+  isScreenSharing: false,
+  pushToTalk: false,
+  messages: [],
+  contacts: [],
+  callLog: [],
+  typingPeer: "",
+  mediaRecorder: null,
+  recordChunks: [],
+  statsTimer: null,
+  localVoiceTimer: null,
+  localAnalyser: null,
+  localAudioContext: null,
+  currentStatus: "offline",
 };
 
-const nameInput = document.getElementById("name");
-const roomInput = document.getElementById("room");
-const joinBtn = document.getElementById("joinBtn");
-const micBtn = document.getElementById("micBtn");
-const callBtn = document.getElementById("callBtn");
-const hangupBtn = document.getElementById("hangupBtn");
-const muteBtn = document.getElementById("muteBtn");
-const copyLinkBtn = document.getElementById("copyLinkBtn");
-const shareLinkInput = document.getElementById("shareLink");
-const chatLog = document.getElementById("chatLog");
-const historyLog = document.getElementById("historyLog");
-const chatInput = document.getElementById("chatInput");
-const sendChatBtn = document.getElementById("sendChatBtn");
-const statusEl = document.getElementById("status");
-const micStatusEl = document.getElementById("micStatus");
-const peersEl = document.getElementById("peers");
-const bannerEl = document.getElementById("presenceBanner");
-const bannerTitleEl = document.getElementById("bannerTitle");
-const bannerDetailEl = document.getElementById("bannerDetail");
-const remoteAudio = document.getElementById("remoteAudio");
-const diagServerEl = document.getElementById("diagServer");
-const diagRoomEl = document.getElementById("diagRoom");
-const diagMicEl = document.getElementById("diagMic");
-const diagCallEl = document.getElementById("diagCall");
+const els = {
+  name: document.getElementById("name"),
+  passcode: document.getElementById("passcode"),
+  targetName: document.getElementById("targetName"),
+  shareLink: document.getElementById("shareLink"),
+  joinBtn: document.getElementById("joinBtn"),
+  micBtn: document.getElementById("micBtn"),
+  cameraBtn: document.getElementById("cameraBtn"),
+  screenBtn: document.getElementById("screenBtn"),
+  callBtn: document.getElementById("callBtn"),
+  answerBtn: document.getElementById("answerBtn"),
+  declineBtn: document.getElementById("declineBtn"),
+  hangupBtn: document.getElementById("hangupBtn"),
+  muteBtn: document.getElementById("muteBtn"),
+  pttBtn: document.getElementById("pttBtn"),
+  recordBtn: document.getElementById("recordBtn"),
+  copyLinkBtn: document.getElementById("copyLinkBtn"),
+  echoToggle: document.getElementById("echoToggle"),
+  noiseToggle: document.getElementById("noiseToggle"),
+  videoToggle: document.getElementById("videoToggle"),
+  status: document.getElementById("status"),
+  micStatus: document.getElementById("micStatus"),
+  peers: document.getElementById("peers"),
+  typingStatus: document.getElementById("typingStatus"),
+  localVideo: document.getElementById("localVideo"),
+  remoteVideo: document.getElementById("remoteVideo"),
+  remoteAudio: document.getElementById("remoteAudio"),
+  presenceBanner: document.getElementById("presenceBanner"),
+  bannerTitle: document.getElementById("bannerTitle"),
+  bannerDetail: document.getElementById("bannerDetail"),
+  diagServer: document.getElementById("diagServer"),
+  diagRoom: document.getElementById("diagRoom"),
+  diagMic: document.getElementById("diagMic"),
+  diagCall: document.getElementById("diagCall"),
+  diagIce: document.getElementById("diagIce"),
+  diagMedia: document.getElementById("diagMedia"),
+  diagStats: document.getElementById("diagStats"),
+  diagTurn: document.getElementById("diagTurn"),
+  diagVoice: document.getElementById("diagVoice"),
+  presenceList: document.getElementById("presenceList"),
+  contactsList: document.getElementById("contactsList"),
+  chatLog: document.getElementById("chatLog"),
+  filesLog: document.getElementById("filesLog"),
+  historyLog: document.getElementById("historyLog"),
+  chatInput: document.getElementById("chatInput"),
+  sendChatBtn: document.getElementById("sendChatBtn"),
+  fileInput: document.getElementById("fileInput"),
+  sendFileBtn: document.getElementById("sendFileBtn"),
+  contactNameInput: document.getElementById("contactNameInput"),
+  saveContactBtn: document.getElementById("saveContactBtn"),
+  incomingDialog: document.getElementById("incomingDialog"),
+  incomingText: document.getElementById("incomingText"),
+  dialogAnswerBtn: document.getElementById("dialogAnswerBtn"),
+  dialogDeclineBtn: document.getElementById("dialogDeclineBtn"),
+};
 
-state.hasMicAccess = false;
-
-function setStatus(text) {
-  statusEl.textContent = text;
-}
-
-function setPeers(text) {
-  peersEl.textContent = text;
-}
-
-function setMicStatus(text) {
-  micStatusEl.textContent = text;
-}
-
-function setDiagnostic(element, text) {
-  element.textContent = text;
+function setText(node, text) {
+  node.textContent = text;
 }
 
 function setBanner(mode, title, detail) {
-  bannerEl.className = `presence-banner ${mode}`;
-  bannerTitleEl.textContent = title;
-  bannerDetailEl.textContent = detail;
+  els.presenceBanner.className = `presence-banner ${mode}`;
+  setText(els.bannerTitle, title);
+  setText(els.bannerDetail, detail);
+}
+
+function setStatus(text) {
+  setText(els.status, text);
+}
+
+function setTypingStatus(text) {
+  setText(els.typingStatus, text);
+}
+
+function setDiag(key, text) {
+  setText(els[key], text);
+}
+
+function normalizeName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 24);
+}
+
+function getSelectedPeer() {
+  return state.peers.find((peer) => peer.clientId === state.selectedPeerId) || null;
+}
+
+function isInCall() {
+  return Boolean(state.peerConnection);
+}
+
+function loadContacts() {
+  try {
+    state.contacts = JSON.parse(localStorage.getItem("wifi-call-contacts") || "[]");
+  } catch {
+    state.contacts = [];
+  }
+}
+
+function saveContacts() {
+  localStorage.setItem("wifi-call-contacts", JSON.stringify(state.contacts));
+}
+
+function upsertContact(name) {
+  const normalized = normalizeName(name);
+  if (!normalized) {
+    return;
+  }
+
+  const existing = state.contacts.find((item) => item.name === normalized);
+  const stamp = new Date().toISOString();
+
+  if (existing) {
+    existing.lastUsed = stamp;
+  } else {
+    state.contacts.unshift({ name: normalized, lastUsed: stamp });
+  }
+
+  state.contacts = state.contacts.slice(0, 20);
+  saveContacts();
+  renderContacts();
+}
+
+function createEntry(title, detail, meta = "") {
+  const wrapper = document.createElement("div");
+  wrapper.className = "entry";
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  const detailNode = document.createElement("div");
+  detailNode.textContent = detail;
+  wrapper.append(strong, detailNode);
+  if (meta) {
+    const metaNode = document.createElement("div");
+    metaNode.textContent = meta;
+    wrapper.append(metaNode);
+  }
+  return wrapper;
+}
+
+function lastSeenText(timestamp) {
+  if (!timestamp) {
+    return "last seen unknown";
+  }
+
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) {
+    return "just now";
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)}m ago`;
+  }
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function renderPresence() {
+  els.presenceList.innerHTML = "";
+  const peers = state.peers.filter((peer) => peer.name !== state.selfName);
+
+  if (peers.length === 0) {
+    els.presenceList.append(createEntry("No one else is here", "Share a call link or ask someone to join.", ""));
+    return;
+  }
+
+  for (const peer of peers) {
+    const item = document.createElement("div");
+    item.className = "list-item";
+    const title = document.createElement("strong");
+    title.textContent = peer.name;
+    const meta = document.createElement("div");
+    meta.textContent = peer.online
+      ? `${peer.status || "online"} now`
+      : `offline, ${lastSeenText(peer.lastSeen)}`;
+    const buttonRow = document.createElement("div");
+    buttonRow.className = "actions";
+    const selectBtn = document.createElement("button");
+    selectBtn.textContent = "Select";
+    selectBtn.addEventListener("click", () => selectPeer(peer));
+    const callBtn = document.createElement("button");
+    callBtn.textContent = "Call";
+    callBtn.disabled = !peer.online || !state.hasMicAccess;
+    callBtn.addEventListener("click", () => {
+      selectPeer(peer);
+      startCall();
+    });
+    buttonRow.append(selectBtn, callBtn);
+    item.append(title, meta, buttonRow);
+    els.presenceList.append(item);
+  }
+}
+
+function renderContacts() {
+  els.contactsList.innerHTML = "";
+
+  if (state.contacts.length === 0) {
+    els.contactsList.append(createEntry("No contacts yet", "Save usernames here for quick calling."));
+    return;
+  }
+
+  for (const contact of state.contacts) {
+    const item = document.createElement("div");
+    item.className = "list-item";
+    const title = document.createElement("strong");
+    title.textContent = contact.name;
+    const meta = document.createElement("div");
+    meta.textContent = `saved ${new Date(contact.lastUsed).toLocaleString()}`;
+    const row = document.createElement("div");
+    row.className = "actions";
+    const choose = document.createElement("button");
+    choose.textContent = "Choose";
+    choose.addEventListener("click", () => {
+      const peer = state.peers.find((itemPeer) => itemPeer.name === contact.name);
+      selectPeer(peer || { clientId: "", name: contact.name });
+    });
+    row.append(choose);
+    item.append(title, meta, row);
+    els.contactsList.append(item);
+  }
+}
+
+function renderHistory() {
+  els.historyLog.innerHTML = "";
+  if (state.callLog.length === 0) {
+    els.historyLog.append(createEntry("No calls yet", "Call history appears here."));
+    return;
+  }
+
+  for (const entry of [...state.callLog].reverse()) {
+    const title = entry.kind === "started" ? "Call started" : "Call ended";
+    const detail = `${entry.fromName || "unknown"}${entry.toName ? ` -> ${entry.toName}` : ""}`;
+    els.historyLog.append(
+      createEntry(title, detail, new Date(entry.createdAt).toLocaleTimeString())
+    );
+  }
+}
+
+function renderFilesLog(message, incoming = false) {
+  const title = incoming ? `File from ${message.fromName}` : `Sent ${message.name}`;
+  const item = document.createElement("div");
+  item.className = "list-item";
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  const meta = document.createElement("div");
+  meta.textContent = `${message.name} • ${Math.round((message.size || 0) / 1024)} KB`;
+  item.append(heading, meta);
+
+  if (message.dataUrl) {
+    const link = document.createElement("a");
+    link.href = message.dataUrl;
+    link.download = message.name;
+    link.textContent = "Download";
+    item.append(link);
+  }
+
+  els.filesLog.prepend(item);
+}
+
+function currentPeerName() {
+  return normalizeName(els.targetName.value) || state.selectedPeerName;
+}
+
+function renderChat() {
+  els.chatLog.innerHTML = "";
+  const target = currentPeerName();
+  const relevant = state.messages.filter(
+    (message) =>
+      !target ||
+      message.fromName === target ||
+      message.toName === target ||
+      message.fromName === state.selfName
+  );
+
+  if (relevant.length === 0) {
+    els.chatLog.append(createEntry("No messages yet", "Chat with your selected username."));
+    return;
+  }
+
+  for (const message of relevant.slice().reverse()) {
+    const receipt = message.readAt ? "Read" : message.fromName === state.selfName ? "Sent" : "Delivered";
+    els.chatLog.append(
+      createEntry(
+        message.fromName,
+        message.text,
+        `${new Date(message.createdAt || Date.now()).toLocaleTimeString()} • ${receipt}`
+      )
+    );
+  }
+}
+
+function updateShareLink() {
+  const url = new URL(window.location.href);
+  if (state.selfName) {
+    url.searchParams.set("user", state.selfName);
+  }
+  if (state.roomKey) {
+    url.searchParams.set("key", state.roomKey);
+  }
+  const target = currentPeerName();
+  if (target) {
+    url.searchParams.set("target", target);
+  } else {
+    url.searchParams.delete("target");
+  }
+  els.shareLink.value = url.toString();
 }
 
 function updateButtons() {
   const joined = Boolean(state.eventSource);
-  const onCall = Boolean(state.peerConnection);
-  joinBtn.disabled = joined;
-  callBtn.disabled = !joined || onCall || !state.remotePeerId || !state.hasMicAccess;
-  hangupBtn.disabled = !onCall;
-  muteBtn.disabled = !state.stream;
-  micBtn.disabled = state.hasMicAccess;
-  sendChatBtn.disabled = !joined;
-  muteBtn.textContent = state.isMuted ? "Unmute" : "Mute";
+  const selected = Boolean(currentPeerName());
+  const callActive = isInCall();
+  const pending = Boolean(state.pendingOffer);
+
+  els.joinBtn.disabled = joined;
+  els.callBtn.disabled = !joined || !selected || !state.hasMicAccess || callActive;
+  els.answerBtn.disabled = !pending;
+  els.declineBtn.disabled = !pending;
+  els.hangupBtn.disabled = !callActive;
+  els.muteBtn.disabled = !state.localStream;
+  els.pttBtn.disabled = !state.localStream;
+  els.recordBtn.disabled = !callActive || !state.remoteStream.getTracks().length;
+  els.sendChatBtn.disabled = !joined || !selected;
+  els.sendFileBtn.disabled = !callActive || !state.dataChannel || state.dataChannel.readyState !== "open";
+  els.micBtn.disabled = state.hasMicAccess;
+  els.muteBtn.textContent = state.isMuted ? "Unmute" : "Mute";
+  els.cameraBtn.textContent = state.isCameraOn ? "Camera Off" : "Camera";
+  els.screenBtn.textContent = state.isScreenSharing ? "Stop Share" : "Share Screen";
+  els.recordBtn.textContent = state.mediaRecorder ? "Stop Recording" : "Record";
+  els.pttBtn.textContent = state.pushToTalk ? "Push To Talk On" : "Push To Talk Off";
+  updateShareLink();
 }
 
-function setCallDiagnostic(text) {
-  setDiagnostic(diagCallEl, text);
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return response.json();
 }
 
-async function checkServerHealth() {
+async function checkHealth() {
   try {
-    const response = await fetch("/health", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error("bad health response");
-    }
-    setDiagnostic(diagServerEl, "Reachable");
+    await fetchJson("/health");
+    setDiag("diagServer", "Reachable");
   } catch {
-    setDiagnostic(diagServerEl, "Unavailable");
+    setDiag("diagServer", "Unavailable");
   }
 }
 
-function createClientId(name) {
-  return `${name}-${crypto.randomUUID().slice(0, 8)}`;
+async function loadConfig() {
+  try {
+    state.config = await fetchJson("/config");
+    if (state.config.turn?.urls?.length) {
+      setDiag("diagTurn", "Configured");
+    } else {
+      setDiag("diagTurn", "STUN only");
+    }
+  } catch {
+    setDiag("diagTurn", "Unavailable");
+  }
+}
+
+async function hashRoomKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return { roomId: "public-lobby", key: "" };
+  }
+
+  const bytes = new TextEncoder().encode(raw);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
+  return { roomId: `key-${hex.slice(0, 16)}`, key: raw };
+}
+
+function makeIceServers() {
+  const servers = [{ urls: "stun:stun.l.google.com:19302" }];
+  const turn = state.config?.turn;
+  if (turn?.urls?.length) {
+    servers.push({
+      urls: turn.urls,
+      username: turn.username,
+      credential: turn.credential,
+    });
+  }
+  return servers;
+}
+
+function selectPeer(peer) {
+  state.selectedPeerId = peer.clientId || "";
+  state.selectedPeerName = normalizeName(peer.name);
+  els.targetName.value = state.selectedPeerName;
+  setText(els.peers, state.selectedPeerName ? `Selected ${state.selectedPeerName}` : "No peer selected.");
+  upsertContact(state.selectedPeerName);
+  updateButtons();
+  renderChat();
+}
+
+function buildClientId() {
+  return `${state.selfName}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 async function sendSignal(payload) {
@@ -96,234 +442,349 @@ async function sendSignal(payload) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      room: state.room,
+      room: state.roomId,
       from: state.clientId,
+      fromName: state.selfName,
       ...payload,
     }),
   });
 }
 
-function formatTime(timestamp) {
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
+async function sendPresenceStatus(status) {
+  state.currentStatus = status;
+  if (!state.eventSource) {
+    return;
+  }
+  await sendSignal({
+    type: "presence-update",
+    status,
   });
 }
 
-function createEntry(title, detail, timestamp) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "entry";
-  wrapper.innerHTML = `<strong>${title}</strong><div>${detail}</div><div>${formatTime(timestamp)}</div>`;
-  return wrapper;
-}
-
-function renderCallLog(callLog = []) {
-  historyLog.innerHTML = "";
-
-  if (callLog.length === 0) {
-    historyLog.append(createEntry("No calls yet", "Join a room and start one.", Date.now()));
-    return;
+async function ensureAudio() {
+  if (state.localStream?.getAudioTracks().length) {
+    return state.localStream;
   }
 
-  [...callLog].reverse().forEach((entry) => {
-    const title = entry.kind === "started" ? "Call started" : "Call ended";
-    const detail = `${entry.from || "unknown"}${entry.to ? ` with ${entry.to}` : ""}`;
-    historyLog.append(createEntry(title, detail, entry.createdAt));
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: els.echoToggle.checked,
+      noiseSuppression: els.noiseToggle.checked,
+    },
+    video: false,
   });
+
+  state.localStream = state.localStream || new MediaStream();
+  stream.getAudioTracks().forEach((track) => state.localStream.addTrack(track));
+  els.localVideo.srcObject = state.localStream;
+  state.hasMicAccess = true;
+  setText(els.micStatus, "Mic enabled and ready.");
+  setDiag("diagMic", "Enabled");
+  attachVoiceMonitor();
+  updateButtons();
+  return state.localStream;
 }
 
-function appendChatMessage(author, text, timestamp) {
-  if (chatLog.dataset.empty === "true") {
-    chatLog.innerHTML = "";
-    chatLog.dataset.empty = "false";
+async function toggleCamera() {
+  if (!state.hasMicAccess) {
+    await ensureAudio();
   }
-  chatLog.prepend(createEntry(author, text, timestamp));
-}
 
-function renderEmptyChat() {
-  chatLog.innerHTML = "";
-  chatLog.dataset.empty = "true";
-  chatLog.append(createEntry("No chat yet", "Messages in this room will show up here.", Date.now()));
-}
-
-async function loadHistory() {
-  const response = await fetch(`/history?room=${encodeURIComponent(state.room)}`);
-  const history = await response.json();
-  renderCallLog(history.callLog || []);
-
-  if (!history.messages || history.messages.length === 0) {
-    renderEmptyChat();
+  if (state.isCameraOn) {
+    const videoTrack = state.localStream?.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.stop();
+      state.localStream.removeTrack(videoTrack);
+      const sender = state.peerConnection?.getSenders().find((item) => item.track?.kind === "video");
+      if (sender) {
+        sender.replaceTrack(null);
+      }
+    }
+    state.isCameraOn = false;
+    setDiag("diagMedia", state.isScreenSharing ? "Screen share" : "Audio only");
+    els.localVideo.srcObject = state.localStream;
+    updateButtons();
     return;
   }
 
-  chatLog.innerHTML = "";
-  chatLog.dataset.empty = "false";
-  history.messages
-    .slice()
-    .reverse()
-    .forEach((message) => chatLog.append(createEntry(message.from, message.text, message.createdAt)));
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  const track = stream.getVideoTracks()[0];
+  state.localStream = state.localStream || new MediaStream();
+  state.localStream.addTrack(track);
+  els.localVideo.srcObject = state.localStream;
+  state.isCameraOn = true;
+  setDiag("diagMedia", "Audio + camera");
+  const sender = state.peerConnection?.getSenders().find((item) => item.track?.kind === "video");
+  if (sender) {
+    await sender.replaceTrack(track);
+  } else if (state.peerConnection) {
+    state.peerConnection.addTrack(track, state.localStream);
+  }
+  updateButtons();
 }
 
-function updateShareLink() {
-  if (!state.room) {
-    shareLinkInput.value = "";
+async function toggleScreenShare() {
+  if (state.isScreenSharing) {
+    const sender = state.peerConnection?.getSenders().find((item) => item.track?.kind === "video");
+    const cameraTrack = state.localStream?.getVideoTracks()[0] || null;
+    if (sender) {
+      await sender.replaceTrack(cameraTrack);
+    }
+    state.isScreenSharing = false;
+    setDiag("diagMedia", state.isCameraOn ? "Audio + camera" : "Audio only");
+    updateButtons();
     return;
   }
 
-  const url = new URL(window.location.href);
-  url.searchParams.set("room", state.room);
-  shareLinkInput.value = url.toString();
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  const track = stream.getVideoTracks()[0];
+  track.addEventListener("ended", () => {
+    if (state.isScreenSharing) {
+      toggleScreenShare().catch(() => {});
+    }
+  });
+  const sender = state.peerConnection?.getSenders().find((item) => item.track?.kind === "video");
+  if (sender) {
+    await sender.replaceTrack(track);
+  } else if (state.peerConnection) {
+    state.peerConnection.addTrack(track, stream);
+  }
+  els.localVideo.srcObject = stream;
+  state.isScreenSharing = true;
+  setDiag("diagMedia", "Screen share");
+  updateButtons();
 }
 
-async function ensureLocalAudio() {
-  if (state.stream) {
-    return state.stream;
+function attachVoiceMonitor() {
+  if (!state.localStream || state.localAnalyser) {
+    return;
   }
 
-  try {
-    state.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-      video: false,
-    });
-    state.hasMicAccess = true;
-    setMicStatus("Mic enabled and ready.");
-    setDiagnostic(diagMicEl, "Enabled");
-    updateButtons();
-    return state.stream;
-  } catch (error) {
-    state.hasMicAccess = false;
-    setMicStatus("Mic blocked. Allow microphone access in the browser, then press Enable Mic again.");
-    setStatus("Microphone permission is required before calling.");
-    setDiagnostic(diagMicEl, "Blocked");
-    updateButtons();
-    throw error;
-  }
+  state.localAudioContext = new AudioContext();
+  const source = state.localAudioContext.createMediaStreamSource(state.localStream);
+  state.localAnalyser = state.localAudioContext.createAnalyser();
+  state.localAnalyser.fftSize = 256;
+  source.connect(state.localAnalyser);
+
+  const data = new Uint8Array(state.localAnalyser.frequencyBinCount);
+  state.localVoiceTimer = window.setInterval(() => {
+    state.localAnalyser.getByteFrequencyData(data);
+    const avg = data.reduce((total, value) => total + value, 0) / data.length;
+    setDiag("diagVoice", avg > 18 ? "Speaking" : "Silent");
+  }, 500);
 }
 
-function createPeerConnection() {
+function createPeerConnection(isCaller) {
   const connection = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    iceServers: makeIceServers(),
   });
+
+  state.remoteStream = new MediaStream();
+  els.remoteVideo.srcObject = state.remoteStream;
+  els.remoteAudio.srcObject = state.remoteStream;
 
   connection.onicecandidate = (event) => {
-    if (event.candidate && state.remotePeerId) {
+    if (event.candidate && state.selectedPeerId) {
       sendSignal({
         type: "ice-candidate",
-        to: state.remotePeerId,
+        to: state.selectedPeerId,
+        toName: currentPeerName(),
         candidate: event.candidate,
-      });
+      }).catch(() => {});
     }
   };
 
   connection.ontrack = (event) => {
-    remoteAudio.srcObject = event.streams[0];
-    remoteAudio.volume = 1;
-    remoteAudio
+    state.remoteStream.addTrack(event.track);
+    els.remoteAudio
       .play()
-      .then(() => {
-        setCallDiagnostic("Audio playing");
-      })
-      .catch(() => {
-        setCallDiagnostic("Playback blocked");
-        setStatus("Call connected, but browser playback is blocked. Press play on the audio control.");
-      });
-    setStatus("Call connected.");
-    setBanner("live", "Call is live", "You should hear the other side now.");
+      .then(() => setDiag("diagCall", "Audio playing"))
+      .catch(() => setDiag("diagCall", "Press play"));
   };
 
   connection.onconnectionstatechange = () => {
-    setCallDiagnostic(connection.connectionState || "Connecting");
+    setDiag("diagCall", connection.connectionState || "connecting");
+    if (connection.connectionState === "connected") {
+      setBanner("live", "Call is live", `Talking with ${currentPeerName()}.`);
+      setStatus("Call connected.");
+      sendPresenceStatus("in-call").catch(() => {});
+      startStatsPolling();
+    }
     if (connection.connectionState === "failed" || connection.connectionState === "disconnected") {
-      setStatus(`Call ${connection.connectionState}. Hang up and try again.`);
-      setBanner("ready", "Peer is still here", "Try starting the call again.");
+      setStatus(`Call ${connection.connectionState}.`);
     }
   };
 
   connection.oniceconnectionstatechange = () => {
-    if (connection.iceConnectionState === "failed") {
-      setCallDiagnostic("ICE failed");
-      setStatus("Network path failed. This often means these two devices need a TURN relay.");
-    }
+    setDiag("diagIce", connection.iceConnectionState || "idle");
   };
 
+  if (isCaller) {
+    const dataChannel = connection.createDataChannel("chat-data");
+    setupDataChannel(dataChannel);
+  } else {
+    connection.ondatachannel = (event) => {
+      setupDataChannel(event.channel);
+    };
+  }
+
   state.peerConnection = connection;
+  addLocalTracksToConnection();
   updateButtons();
   return connection;
 }
 
-async function startPeerConnection() {
-  const connection = createPeerConnection();
-  const stream = await ensureLocalAudio();
-
-  for (const track of stream.getTracks()) {
-    connection.addTrack(track, stream);
-  }
-
-  return connection;
-}
-
-async function joinRoom() {
-  const room = roomInput.value.trim().toLowerCase();
-  const name = nameInput.value.trim().toLowerCase();
-
-  if (!room || !name) {
-    setStatus("Enter both your name and a room code.");
+function addLocalTracksToConnection() {
+  if (!state.peerConnection || !state.localStream) {
     return;
   }
 
-  state.room = room;
-  state.clientId = createClientId(name);
-  updateShareLink();
+  const existingKinds = new Set(state.peerConnection.getSenders().map((sender) => sender.track?.kind));
+  for (const track of state.localStream.getTracks()) {
+    if (!existingKinds.has(track.kind)) {
+      state.peerConnection.addTrack(track, state.localStream);
+    }
+  }
+}
 
-  const eventSource = new EventSource(
-    `/events?room=${encodeURIComponent(room)}&client=${encodeURIComponent(state.clientId)}`
-  );
-  state.eventSource = eventSource;
-
-  eventSource.onmessage = async (event) => {
-    const message = JSON.parse(event.data);
-    await handleSignal(message);
+function setupDataChannel(channel) {
+  state.dataChannel = channel;
+  channel.onopen = () => {
+    setDiag("diagCall", "Data channel open");
+    updateButtons();
   };
-
-  eventSource.onerror = () => {
-    setStatus("Connection to room lost. Refresh and rejoin.");
-    setBanner("waiting", "Room connection lost", "Refresh this page and join again.");
+  channel.onclose = () => updateButtons();
+  channel.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.type === "file") {
+        renderFilesLog(payload, true);
+      }
+    } catch {
+      // Ignore malformed payloads.
+    }
   };
+}
 
-  setStatus(`Joined room "${room}". Waiting for another person.`);
-  setBanner("waiting", "Joined room", "Now open the same room somewhere else.");
-  setDiagnostic(diagRoomEl, `Joined ${room}`);
-  setCallDiagnostic("Idle");
-  await loadHistory();
+function playRingtone() {
+  try {
+    const audioContext = new AudioContext();
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = "triangle";
+    oscillator.frequency.value = 720;
+    gain.gain.value = 0.05;
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start();
+    window.setTimeout(() => {
+      oscillator.stop();
+      audioContext.close();
+    }, 650);
+  } catch {
+    // Ringtone is best effort only.
+  }
+}
+
+async function startCall() {
+  const targetName = currentPeerName();
+  const peer = state.peers.find((item) => item.name === targetName && item.online);
+  if (!peer) {
+    setStatus("That username is not online in this room key.");
+    return;
+  }
+
+  selectPeer(peer);
+  upsertContact(peer.name);
+  await ensureAudio();
+  if (els.videoToggle.checked && !state.isCameraOn) {
+    await toggleCamera();
+  }
+
+  const connection = createPeerConnection(true);
+  const offer = await connection.createOffer();
+  await connection.setLocalDescription(offer);
+
+  await sendSignal({
+    type: "call-started",
+    to: peer.clientId,
+    toName: peer.name,
+  });
+
+  await sendSignal({
+    type: "offer",
+    to: peer.clientId,
+    toName: peer.name,
+    offer,
+    wantsVideo: state.isCameraOn || els.videoToggle.checked,
+  });
+
+  setBanner("calling", "Calling now", `Calling ${peer.name}.`);
+  setStatus(`Calling ${peer.name}...`);
+  setDiag("diagCall", "Calling");
+}
+
+async function answerCall() {
+  if (!state.pendingOffer) {
+    return;
+  }
+
+  await ensureAudio();
+  if (state.pendingOffer.wantsVideo && els.videoToggle.checked && !state.isCameraOn) {
+    await toggleCamera();
+  }
+
+  const connection = createPeerConnection(false);
+  await connection.setRemoteDescription(state.pendingOffer.offer);
+  const answer = await connection.createAnswer();
+  await connection.setLocalDescription(answer);
+
+  await sendSignal({
+    type: "answer",
+    to: state.pendingOffer.from,
+    toName: state.pendingOffer.fromName,
+    answer,
+  });
+
+  els.incomingDialog.close();
+  state.pendingOffer = null;
+  setBanner("calling", "Connecting call", `Answering ${currentPeerName()}.`);
+  setDiag("diagCall", "Answering");
   updateButtons();
 }
 
-function refreshPeerState(peers) {
-  const others = peers.filter((peer) => peer !== state.clientId);
-  if (others.length > 0) {
-    state.remotePeerId = others[0];
-    setPeers(`Peer ready: ${others[0]}`);
-    setStatus("Someone else joined your room.");
-    setBanner("ready", "Someone joined your room", `${others[0]} is here. Enable your mic, then press Start Call.`);
-    document.title = "Peer joined - Wi-Fi Call";
-    setDiagnostic(diagRoomEl, "Peer joined");
-  } else {
-    state.remotePeerId = "";
-    setPeers("No one else is here yet.");
-    setBanner("waiting", "Waiting for someone else to join", "Open the same room in another tab or device.");
-    document.title = "Wi-Fi Call";
-    setDiagnostic(diagRoomEl, state.eventSource ? "Joined, waiting" : "Not joined");
+async function declineCall() {
+  if (!state.pendingOffer) {
+    return;
   }
+
+  await sendSignal({
+    type: "call-declined",
+    to: state.pendingOffer.from,
+    toName: state.pendingOffer.fromName,
+  });
+
+  els.incomingDialog.close();
+  state.pendingOffer = null;
+  setStatus("Declined the incoming call.");
+  setBanner("ready", "Call declined", "The caller is still online.");
   updateButtons();
 }
 
 async function handleSignal(message) {
   if (message.type === "presence") {
-    refreshPeerState(message.peers || []);
-    renderCallLog(message.callLog || []);
+    state.peers = message.peers || [];
+    state.callLog = message.callLog || [];
+    renderPresence();
+    renderHistory();
+
+    const match = state.peers.find((peer) => peer.name === currentPeerName());
+    if (match) {
+      state.selectedPeerId = match.clientId;
+      state.selectedPeerName = match.name;
+      setText(els.peers, `Selected ${match.name}`);
+    }
+    updateButtons();
     return;
   }
 
@@ -332,33 +793,26 @@ async function handleSignal(message) {
   }
 
   if (message.type === "offer") {
-    state.remotePeerId = message.from;
-    if (!state.hasMicAccess) {
-      setStatus(`Incoming call from ${message.from}. Press Enable Mic, then ask them to call again.`);
-      setBanner("calling", "Incoming call waiting", "Enable your mic first. The browser will ask for permission.");
-      setCallDiagnostic("Waiting for mic");
-      return;
+    state.selectedPeerId = message.from;
+    state.selectedPeerName = message.fromName;
+    els.targetName.value = message.fromName;
+    state.pendingOffer = message;
+    els.incomingText.textContent = `${message.fromName} is calling you.`;
+    if (!els.incomingDialog.open) {
+      els.incomingDialog.showModal();
     }
-    const connection = await startPeerConnection();
-    await connection.setRemoteDescription(message.offer);
-    const answer = await connection.createAnswer();
-    await connection.setLocalDescription(answer);
-    await sendSignal({
-      type: "answer",
-      to: message.from,
-      answer,
-    });
-    setStatus(`Incoming call answered from ${message.from}.`);
-    setBanner("calling", "Connecting call", `Answering ${message.from} now.`);
-    setCallDiagnostic("Answering");
+    playRingtone();
+    setBanner("calling", "Incoming call", `Answer or decline ${message.fromName}.`);
+    setStatus(`Incoming call from ${message.fromName}.`);
+    setDiag("diagCall", "Incoming");
+    updateButtons();
     return;
   }
 
   if (message.type === "answer" && state.peerConnection) {
     await state.peerConnection.setRemoteDescription(message.answer);
     setStatus("Call answered.");
-    setBanner("calling", "Call answered", "Finishing connection now.");
-    setCallDiagnostic("Negotiated");
+    setDiag("diagCall", "Negotiated");
     return;
   }
 
@@ -367,165 +821,400 @@ async function handleSignal(message) {
     return;
   }
 
-  if (message.type === "chat-message" && message.text) {
-    appendChatMessage(message.from, message.text, message.createdAt);
-    return;
-  }
-
-  if (message.type === "call-started") {
-    await loadHistory();
-    setBanner("calling", "Incoming call", `${message.from} is calling you now.`);
-    setStatus(`Incoming call from ${message.from}.`);
-    setCallDiagnostic("Incoming");
+  if (message.type === "call-declined") {
+    setStatus(`${message.fromName} declined the call.`);
+    setBanner("ready", "Call declined", "You can try again later.");
+    setDiag("diagCall", "Declined");
+    closeCall(false);
     return;
   }
 
   if (message.type === "hangup") {
+    setStatus(`${message.fromName} hung up.`);
     closeCall(false);
-    setStatus("The other person hung up.");
-    setBanner("ready", "Call ended", "The other person is still in the room.");
-    setCallDiagnostic("Ended");
-    await loadHistory();
+    return;
+  }
+
+  if (message.type === "typing") {
+    setTypingStatus(`${message.fromName} is typing...`);
+    window.clearTimeout(state.typingTimer);
+    state.typingTimer = window.setTimeout(() => setTypingStatus("No one is typing."), 1200);
+    return;
+  }
+
+  if (message.type === "chat-message") {
+    state.messages.push({ ...message, readAt: null });
+    renderChat();
+    await sendSignal({
+      type: "chat-read",
+      to: message.from,
+      toName: message.fromName,
+      messageId: message.messageId,
+    });
+    return;
+  }
+
+  if (message.type === "chat-read") {
+    const local = state.messages.find((item) => item.messageId === message.messageId);
+    if (local) {
+      local.readAt = Date.now();
+      renderChat();
+    }
   }
 }
 
-async function startCall() {
-  if (!state.remotePeerId) {
-    setStatus("No peer is available in the room.");
+async function loadHistory() {
+  if (!state.roomId) {
     return;
   }
 
-  if (!state.hasMicAccess) {
-    setStatus("Press Enable Mic first.");
-    setBanner("calling", "Mic needed first", "Use Enable Mic, allow permission, then start the call.");
-    setCallDiagnostic("Mic needed");
+  const history = await fetchJson(`/history?room=${encodeURIComponent(state.roomId)}`);
+  state.callLog = history.callLog || [];
+  state.messages = history.messages || [];
+  state.peers = history.peers || state.peers;
+  renderHistory();
+  renderPresence();
+  renderChat();
+}
+
+async function joinRoom() {
+  const selfName = normalizeName(els.name.value);
+  if (!selfName) {
+    setStatus("Pick a username first.");
     return;
   }
 
-  const connection = await startPeerConnection();
-  const offer = await connection.createOffer();
-  await connection.setLocalDescription(offer);
-  await sendSignal({
-    type: "call-started",
-    to: state.remotePeerId,
-  });
-  await sendSignal({
-    type: "offer",
-    to: state.remotePeerId,
-    offer,
-  });
-  setStatus(`Calling ${state.remotePeerId}...`);
-  setBanner("calling", "Calling now", `Trying to connect to ${state.remotePeerId}.`);
-  setCallDiagnostic("Calling");
-  await loadHistory();
+  const roomInfo = await hashRoomKey(els.passcode.value);
+  state.roomId = roomInfo.roomId;
+  state.roomKey = roomInfo.key;
+  state.selfName = selfName;
+  state.clientId = buildClientId();
+  state.reconnectAllowed = true;
+
+  setDiag("diagRoom", roomInfo.key ? "Private key room" : "Public lobby");
+  setStatus("Joining...");
+  setBanner("waiting", "Joining room", "Opening realtime presence now.");
+
+  connectEventStream();
+  upsertContact(selfName);
+}
+
+function connectEventStream() {
+  if (!state.roomId || !state.selfName || !state.clientId) {
+    return;
+  }
+
+  state.eventSource?.close();
+  const url = `/events?room=${encodeURIComponent(state.roomId)}&client=${encodeURIComponent(
+    state.clientId
+  )}&name=${encodeURIComponent(state.selfName)}&status=${encodeURIComponent(state.currentStatus || "online")}`;
+  const eventSource = new EventSource(url);
+  state.eventSource = eventSource;
+
+  eventSource.onmessage = async (event) => {
+    const payload = JSON.parse(event.data);
+    await handleSignal(payload);
+  };
+
+  eventSource.onerror = () => {
+    setStatus("Connection lost. Reconnecting...");
+    setBanner("waiting", "Reconnecting", "Trying to restore presence and call state.");
+    setDiag("diagRoom", "Reconnecting");
+    eventSource.close();
+    state.eventSource = null;
+
+    if (state.reconnectAllowed) {
+      window.clearTimeout(state.reconnectTimer);
+      state.reconnectTimer = window.setTimeout(connectEventStream, 2000);
+    }
+  };
+
+  setStatus(`Joined as ${state.selfName}.`);
+  setBanner("waiting", "Joined", "Select a username from the people list or use a call link.");
+  setDiag("diagRoom", "Joined");
+  loadHistory().catch(() => {});
+  sendPresenceStatus("online").catch(() => {});
+  updateButtons();
 }
 
 function closeCall(notify = true) {
-  if (state.peerConnection) {
-    state.peerConnection.close();
-    state.peerConnection = null;
-  }
-
-  remoteAudio.srcObject = null;
-  remoteAudio.pause();
-  updateButtons();
-
-  if (notify && state.remotePeerId) {
+  if (notify && state.selectedPeerId) {
     sendSignal({
       type: "hangup",
-      to: state.remotePeerId,
-    });
+      to: state.selectedPeerId,
+      toName: currentPeerName(),
+    }).catch(() => {});
   }
 
-  if (state.remotePeerId) {
-    setBanner("ready", "Call ended", "The other person is still in the room.");
-  } else {
-    setBanner("waiting", "Waiting for someone else to join", "Open the same room in another tab or device.");
-  }
-
-  setCallDiagnostic("Idle");
-
-  loadHistory();
+  window.clearInterval(state.statsTimer);
+  state.statsTimer = null;
+  state.peerConnection?.close();
+  state.peerConnection = null;
+  state.dataChannel = null;
+  state.remoteStream = new MediaStream();
+  els.remoteVideo.srcObject = state.remoteStream;
+  els.remoteAudio.srcObject = state.remoteStream;
+  setDiag("diagCall", "Idle");
+  setDiag("diagIce", "Idle");
+  setDiag("diagStats", "No active call");
+  setBanner("ready", "Call ended", "The other person may still be online.");
+  sendPresenceStatus("online").catch(() => {});
+  updateButtons();
 }
 
 function toggleMute() {
-  if (!state.stream) {
+  if (!state.localStream) {
     return;
   }
 
   state.isMuted = !state.isMuted;
-  for (const track of state.stream.getAudioTracks()) {
+  state.localStream.getAudioTracks().forEach((track) => {
     track.enabled = !state.isMuted;
-  }
+  });
   updateButtons();
 }
 
+function togglePushToTalkMode() {
+  state.pushToTalk = !state.pushToTalk;
+  if (!state.localStream) {
+    updateButtons();
+    return;
+  }
+
+  const enabled = !state.pushToTalk && !state.isMuted;
+  state.localStream.getAudioTracks().forEach((track) => {
+    track.enabled = enabled;
+  });
+  updateButtons();
+}
+
+function setPushToTalkPressed(active) {
+  if (!state.pushToTalk || !state.localStream) {
+    return;
+  }
+  state.localStream.getAudioTracks().forEach((track) => {
+    track.enabled = active;
+  });
+}
+
 async function sendChat() {
-  const text = chatInput.value.trim();
-  if (!text) {
+  const target = currentPeerName();
+  const peer = state.peers.find((item) => item.name === target);
+  const text = els.chatInput.value.trim();
+  if (!text || !peer) {
+    return;
+  }
+
+  const messageId = crypto.randomUUID();
+  const message = {
+    type: "chat-message",
+    to: peer.clientId,
+    toName: peer.name,
+    text,
+    messageId,
+    createdAt: Date.now(),
+    fromName: state.selfName,
+  };
+
+  state.messages.push({ ...message });
+  renderChat();
+  els.chatInput.value = "";
+  await sendSignal(message);
+}
+
+async function sendTyping() {
+  const target = currentPeerName();
+  const peer = state.peers.find((item) => item.name === target);
+  if (!peer) {
     return;
   }
 
   await sendSignal({
-    type: "chat-message",
-    text,
+    type: "typing",
+    to: peer.clientId,
+    toName: peer.name,
   });
-  appendChatMessage(state.clientId, text, Date.now());
-  chatInput.value = "";
 }
 
-async function copyLink() {
-  if (!shareLinkInput.value) {
+async function sendFile() {
+  const file = els.fileInput.files[0];
+  if (!file || !state.dataChannel || state.dataChannel.readyState !== "open") {
     return;
   }
 
-  await navigator.clipboard.writeText(shareLinkInput.value);
-  setStatus("Room link copied.");
+  if (file.size > 750_000) {
+    setStatus("Keep file transfers under about 750 KB for this free browser-only version.");
+    return;
+  }
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const payload = {
+    type: "file",
+    fromName: state.selfName,
+    name: file.name,
+    size: file.size,
+    mime: file.type,
+    dataUrl,
+  };
+
+  state.dataChannel.send(JSON.stringify(payload));
+  renderFilesLog(payload, false);
+  await sendSignal({
+    type: "file-meta",
+    to: state.selectedPeerId,
+    toName: currentPeerName(),
+    name: file.name,
+    size: file.size,
+  });
+  els.fileInput.value = "";
 }
 
-async function enableMic() {
-  try {
-    await ensureLocalAudio();
-    setStatus("Microphone is ready.");
-    setCallDiagnostic("Ready");
-    if (state.remotePeerId) {
-      setBanner("ready", "Mic ready", "The other person is here. Press Start Call.");
-    } else {
-      setBanner("waiting", "Mic ready", "Now wait for someone else to join this room.");
-    }
-  } catch {
-    // Status is already updated in ensureLocalAudio.
+function toggleRecording() {
+  if (state.mediaRecorder) {
+    state.mediaRecorder.stop();
+    return;
   }
+
+  const stream = state.remoteStream.getTracks().length ? state.remoteStream : state.localStream;
+  if (!stream) {
+    return;
+  }
+
+  state.recordChunks = [];
+  state.mediaRecorder = new MediaRecorder(stream);
+  state.mediaRecorder.ondataavailable = (event) => {
+    if (event.data.size) {
+      state.recordChunks.push(event.data);
+    }
+  };
+  state.mediaRecorder.onstop = () => {
+    const blob = new Blob(state.recordChunks, { type: "video/webm" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `wifi-call-${Date.now()}.webm`;
+    link.click();
+    URL.revokeObjectURL(url);
+    state.mediaRecorder = null;
+    updateButtons();
+  };
+  state.mediaRecorder.start();
+  updateButtons();
+}
+
+function startStatsPolling() {
+  window.clearInterval(state.statsTimer);
+  state.statsTimer = window.setInterval(async () => {
+    if (!state.peerConnection) {
+      return;
+    }
+
+    const stats = await state.peerConnection.getStats();
+    let line = "No RTP yet";
+    stats.forEach((report) => {
+      if (report.type === "candidate-pair" && report.state === "succeeded") {
+        line = `RTT ${Math.round((report.currentRoundTripTime || 0) * 1000)}ms`;
+      }
+      if (report.type === "inbound-rtp" && report.kind === "audio") {
+        line = `Packets ${report.packetsReceived || 0} • Lost ${report.packetsLost || 0}`;
+      }
+    });
+    setDiag("diagStats", line);
+  }, 2000);
+}
+
+async function copyLink() {
+  if (!els.shareLink.value) {
+    return;
+  }
+
+  await navigator.clipboard.writeText(els.shareLink.value);
+  setStatus("Call link copied.");
+}
+
+function saveContactFromInput() {
+  upsertContact(els.contactNameInput.value);
+  els.contactNameInput.value = "";
 }
 
 function hydrateFromUrl() {
   const params = new URLSearchParams(window.location.search);
-  const room = params.get("room");
-  if (room) {
-    roomInput.value = room;
+  const user = normalizeName(params.get("user"));
+  const target = normalizeName(params.get("target"));
+  const key = params.get("key") || "";
+  if (user) {
+    els.name.value = user;
+  }
+  if (target) {
+    els.targetName.value = target;
+    state.selectedPeerName = target;
+  }
+  if (key) {
+    els.passcode.value = key;
   }
 }
 
-joinBtn.addEventListener("click", joinRoom);
-micBtn.addEventListener("click", enableMic);
-callBtn.addEventListener("click", startCall);
-hangupBtn.addEventListener("click", () => {
-  closeCall(true);
-  setStatus("Call ended.");
+function registerServiceWorker() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+  }
+}
+
+els.joinBtn.addEventListener("click", () => joinRoom().catch((error) => setStatus(error.message)));
+els.micBtn.addEventListener("click", () => ensureAudio().catch((error) => setStatus(error.message)));
+els.cameraBtn.addEventListener("click", () => toggleCamera().catch((error) => setStatus(error.message)));
+els.screenBtn.addEventListener("click", () => toggleScreenShare().catch((error) => setStatus(error.message)));
+els.callBtn.addEventListener("click", () => startCall().catch((error) => setStatus(error.message)));
+els.answerBtn.addEventListener("click", () => answerCall().catch((error) => setStatus(error.message)));
+els.declineBtn.addEventListener("click", () => declineCall().catch((error) => setStatus(error.message)));
+els.dialogAnswerBtn.addEventListener("click", () => answerCall().catch((error) => setStatus(error.message)));
+els.dialogDeclineBtn.addEventListener("click", () => declineCall().catch((error) => setStatus(error.message)));
+els.hangupBtn.addEventListener("click", () => closeCall(true));
+els.muteBtn.addEventListener("click", toggleMute);
+els.pttBtn.addEventListener("click", togglePushToTalkMode);
+els.recordBtn.addEventListener("click", toggleRecording);
+els.copyLinkBtn.addEventListener("click", () => copyLink().catch((error) => setStatus(error.message)));
+els.sendChatBtn.addEventListener("click", () => sendChat().catch((error) => setStatus(error.message)));
+els.sendFileBtn.addEventListener("click", () => sendFile().catch((error) => setStatus(error.message)));
+els.saveContactBtn.addEventListener("click", saveContactFromInput);
+els.targetName.addEventListener("input", () => {
+  state.selectedPeerName = normalizeName(els.targetName.value);
+  updateButtons();
+  renderChat();
 });
-muteBtn.addEventListener("click", toggleMute);
-sendChatBtn.addEventListener("click", sendChat);
-copyLinkBtn.addEventListener("click", copyLink);
-chatInput.addEventListener("keydown", (event) => {
+els.chatInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
-    sendChat();
+    sendChat().catch((error) => setStatus(error.message));
+  } else {
+    sendTyping().catch(() => {});
   }
 });
+els.pttBtn.addEventListener("mousedown", () => setPushToTalkPressed(true));
+els.pttBtn.addEventListener("mouseup", () => setPushToTalkPressed(false));
+els.pttBtn.addEventListener("mouseleave", () => setPushToTalkPressed(false));
+els.pttBtn.addEventListener("touchstart", () => setPushToTalkPressed(true), { passive: true });
+els.pttBtn.addEventListener("touchend", () => setPushToTalkPressed(false), { passive: true });
 
 hydrateFromUrl();
-renderEmptyChat();
-renderCallLog();
-setBanner("waiting", "Waiting for someone else to join", "Open the same room in another tab or device.");
-checkServerHealth();
-setCallDiagnostic("Idle");
+loadContacts();
+renderContacts();
+renderPresence();
+renderHistory();
+renderChat();
+checkHealth().catch(() => {});
+loadConfig().catch(() => {});
+registerServiceWorker();
+setBanner("waiting", "Pick your username and join", "Presence, calls, and chat stay inside the same key space.");
+setTypingStatus("No one is typing.");
+setDiag("diagMedia", "Audio only");
+setDiag("diagCall", "Idle");
+setDiag("diagIce", "Idle");
+setDiag("diagStats", "No active call");
+setDiag("diagVoice", "Silent");
 updateButtons();
